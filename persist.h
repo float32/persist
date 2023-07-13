@@ -26,6 +26,7 @@
 #include <cstring>
 #include <limits>
 #include <algorithm>
+#include <type_traits>
 #include "inc/crc16.h"
 
 namespace persist
@@ -45,7 +46,6 @@ template <typename NVMem, typename TData, uint8_t datatype_version,
 class Persist
 {
 public:
-
     Persist(NVMem& nvmem) : nvmem_{nvmem} {}
 
     Result Init(void)
@@ -122,9 +122,36 @@ public:
         return RESULT_SUCCESS;
     }
 
+    template <typename First, typename... Rest>
+    Result LoadLegacy(TData& data)
+    {
+        Result result = Load(data);
+
+        if (result == RESULT_FAIL_NO_DATA)
+        {
+            First l_persist{nvmem_};
+            result = l_persist.Init();
+
+            if (result == RESULT_SUCCESS)
+            {
+                typename First::DataType l_data;
+                result = l_persist.template LoadLegacy<Rest...>(l_data);
+
+                if (result == RESULT_SUCCESS)
+                {
+                    data = static_cast<TData>(l_data);
+                }
+            }
+        }
+
+        return result;
+    }
+
 protected:
     static_assert(NVMem::kEraseGranularity <= NVMem::kSize);
     static_assert(NVMem::kWriteGranularity <= NVMem::kSize);
+    static_assert(std::is_trivial_v<TData>);
+    static_assert(std::is_standard_layout_v<TData>);
 
     static constexpr
     uint32_t PadSize(uint32_t unpadded_size, uint32_t granularity)
@@ -141,7 +168,7 @@ protected:
 
     struct __attribute__ ((packed)) Block
     {
-        TData data;
+        uint8_t data[sizeof(TData)];
         TSequenceNum sequence_n;
         TCRC crc;
         uint8_t padding[kBlockPaddingSize];
@@ -254,6 +281,15 @@ protected:
     {
         return (active_block_n_ != -1) &&
             (0 == std::memcmp(&block_.data, &data, sizeof(TData)));
+    }
+
+    template <typename A, typename B, uint8_t C, bool D> friend class Persist;
+    using DataType = TData;
+
+    template <typename... Ts, std::enable_if_t<sizeof...(Ts) == 0, bool> = true>
+    Result LoadLegacy(TData& data)
+    {
+        return Load(data);
     }
 };
 

@@ -52,7 +52,8 @@ The constructor parameter `nvmem` is an `NVMem` object which we inject into
 `Persist` upon instantiation.
 
 `TData` is the data type we want to save and load. This might be a structure
-containing calibration data or user settings.
+containing calibration data or user settings. It must be both a trivial and
+a standard-layout type.
 
 `datatype_version` is a version number which `Persist` uses to prevent loading
 invalid data. Version numbers need not be sequential, only unique.
@@ -107,28 +108,72 @@ The return value may be one of the following:
 - `RESULT_SUCCESS`: Successfully loaded saved data.
 - `RESULT_FAIL_NO_DATA`: No valid saved data was found in the memory region.
 
-In the case of `RESULT_FAIL_NO_DATA`, we can use the template parameter
-`datatype_version` to implement backward compatibility if a software update
-changes the data type:
+### Backward compatibility
+
+We can use the template parameter `datatype_version` and the template member
+function `LoadLegacy` to implement backward compatibility if a software update
+changes the data type. First, we define a structure for each data type. Each
+structure except the lowest priority one must have a defaulted default
+constructor and a converting or explicit constructor for the next-lower
+priority type:
 
 ```C++
-persist::Persist<FlashMemory, NewDataType, 1> persist{nvmem};
+struct DataVersion0
+{
+    uint8_t number;
+};
+
+struct DataVersion1
+{
+    uint16_t number;
+    DataVersion1() = default;
+    explicit DataVersion1(const DataVersion0& data0)
+    {
+        number = data0.number;
+    }
+};
+
+struct DataVersion2
+{
+    uint32_t number;
+    DataVersion2() = default;
+    explicit DataVersion2(const DataVersion1& data1)
+    {
+        number = data1.number;
+    }
+};
+```
+
+Optionally and for convenience, we next define a `Persist` type for each data
+type:
+
+```C++
+using Persist0 = persist::Persist<FlashMemory, DataVersion0, 0>;
+using Persist1 = persist::Persist<FlashMemory, DataVersion1, 1>;
+using Persist2 = persist::Persist<FlashMemory, DataVersion2, 2>;
+```
+
+Then, after instantiating and initializing a `Persist` object for the highest
+priority data type, we call its `LoadLegacy` function with a template argument
+list of the other `Persist` types in order of descending priority:
+
+```C++
+Persist2 persist{nvmem};
 nvmem.Init();
 persist.Init();
-NewDataType new_data;
-
-if (persist.Load(new_data) == persist::RESULT_FAIL_NO_DATA)
-{
-    persist::Persist<FlashMemory, OldDataType, 0> old_persist{nvmem};
-    old_persist.Init();
-    OldDataType old_data;
-
-    if (old_persist.Load(old_data) == persist::RESULT_SUCCESS)
-    {
-        new_data = MigrateData(old_data);
-    }
-}
+DataVersion2 data;
+persist::Result result = persist.LoadLegacy<Persist1, Persist0>(data);
 ```
+
+`Persist` will look for saved data of each type in descending priority order.
+If any is found, it will be incrementally converted up to the highest priority
+type.
+
+The return value may be one of the following:
+
+- `RESULT_SUCCESS`: Successfully loaded saved data.
+- `RESULT_FAIL_READ`: Failed to read from memory.
+- `RESULT_FAIL_NO_DATA`: No valid saved data was found in the memory region.
 
 ### Saving data
 
