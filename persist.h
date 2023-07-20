@@ -214,11 +214,9 @@ protected:
             if (block_.crc == GetCRC(block_))
             {
                 TSequenceNum sn = block_.sequence_n;
-                constexpr int32_t num_blocks = kNumBlocks;
+                TSequenceNum delta = sn - sequence_;
 
-                if ((active_block_n_ == -1) ||
-                    ((sn > sequence_) && (sn - sequence_ < num_blocks)) ||
-                    ((sn < sequence_) && (sequence_ - sn >= num_blocks)))
+                if (active_block_n_ == -1 || delta < kNumBlocks)
                 {
                     active_block_n_ = i;
                     sequence_ = sn;
